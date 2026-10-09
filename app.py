@@ -14,9 +14,8 @@ st.title("📊 Финансовая аналитика компании")
 st.markdown("Интерактивный дашборд: **Cash-flow** и **Анализ Дт-Кт**.")
 
 @st.cache_data(ttl=600)
-def load_excel_sheets_from_drive():
+def load_excel_bytes_from_drive():
     creds_dict = None
-    
     if "GOOGLE_CREDENTIALS_JSON" in os.environ:
         creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
     elif "gcp_service_account" in st.secrets:
@@ -26,7 +25,6 @@ def load_excel_sheets_from_drive():
             creds_dict = json.load(f)
             
     if not creds_dict:
-        st.error("❌ Не найдены настройки доступа (секретный ключ).")
         return None
 
     SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
@@ -42,54 +40,68 @@ def load_excel_sheets_from_drive():
         done = False
         while not done:
             status, done = downloader.next_chunk()
-            
         fh.seek(0)
-        # Загружаем все листы
-        excel_data = pd.read_excel(fh, sheet_name=None)
-        return excel_data
+        return fh
     except Exception as e:
         st.error(f"Ошибка при скачивании файла: {e}")
         return None
 
-try:
-    sheets_dict = load_excel_sheets_from_drive()
-    if sheets_dict:
-        # Ищем нужные листы без учета регистра букв (чтобы названия вроде "Cash-flow", "cash flow", "Cash_Flow" тоже находились)
-        target_sheets = {}
-        for name in sheets_dict.keys():
-            clean_name = name.strip().lower()
-            if 'cash' in clean_name or 'flow' in clean_name:
-                target_sheets['Cash-flow'] = sheets_dict[name]
-            elif 'дт' in clean_name or 'кт' in clean_name or 'анализ' in clean_name:
-                target_sheets['Анализ Дт-Кт'] = sheets_dict[name]
+fh = load_excel_bytes_from_drive()
 
-        # Если автоматически не нашлись по ключевым словам, выведем то, что есть, но с приоритетом
-        if not target_sheets:
-            target_sheets = sheets_dict
-
-        # Создаем вкладки для переключения между листами прямо на странице
-        sheet_names_list = list(target_sheets.keys())
-        tabs = st.tabs(sheet_names_list)
-
-        for i, sheet_name in enumerate(sheet_names_list):
-            with tabs[i]:
-                df = target_sheets[sheet_name]
-                st.subheader(f"📋 Лист: {sheet_name}")
-                st.dataframe(df, use_container_width=True)
-                
-                # Дополнительная аналитика для листов (если есть колонки со статусом или суммой)
-                status_col = next((col for col in df.columns if 'СТАТУС' in str(col).upper()), None)
-                if status_col:
-                    st.subheader("📌 Распределение по статусам")
-                    status_counts = df[status_col].value_counts().reset_index()
-                    status_counts.columns = ['Статус', 'Количество']
-                    fig = px.pie(status_counts, names='Статус', values='Количество', hole=0.4)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                sum_col = next((col for col in df.columns if 'СУММА' in str(col).upper()), None)
-                if sum_col:
-                    total_val = pd.to_numeric(df[sum_col], errors='coerce').sum()
-                    st.metric(label="💰 Общая сумма", value=f"{total_val:,.2f}")
+if fh:
+    try:
+        # Читаем все листы
+        xls = pd.ExcelFile(fh)
+        sheet_names = xls.sheet_names
+        
+        # Находим нужные листы по именам
+        dt_kt_sheet = next((s for s in sheet_names if 'дт' in s.lower() or 'кт' in s.lower() or 'анализ' in s.lower()), sheet_names[0])
+        cash_sheet = next((s for s in sheet_names if 'cash' in s.lower() or 'flow' in s.lower()), sheet_names[1] if len(sheet_names) > 1 else sheet_names[0])
+        
+        tabs = st.tabs(["📌 Анализ Дт-Кт", "💵 Cash-flow"])
+        
+        # --- Вкладка 1: Анализ Дт-Кт ---
+        with tabs[0]:
+            st.subheader("📋 Анализ Дт-Кт по контрагентам")
             
-except Exception as e:
-    st.error(f"Ошибка: {e}")
+            # Читаем весь лист без заголовков, чтобы точно вытащить диапазон I1:J7 (колонки 8 и 9 в индексах Python)
+            raw_df = pd.read_excel(xls, sheet_name=dt_kt_sheet, header=None)
+            
+            # 1. Верхняя таблица (диапазон I1:J7 -> строки 0-6, столбцы 8-9)
+            if raw_df.shape[1] >= 10 and raw_df.shape[0] >= 7:
+                # Извлекаем блок I1:J7
+                summary_block = raw_df.iloc[0:7, 8:10].copy()
+                summary_block.columns = ['Показатель', 'Значение']
+                
+                # Если у нас несколько контрагентов или таблица позволяет выбрать, сделаем красивый вид
+                st.markdown("### Сводка по контрагенту")
+                
+                # Отображаем в виде аккуратных метрик или таблицы
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    for idx, row in summary_block.iterrows():
+                        st.text(f"{row['Показатель']}:")
+                with col2:
+                    for idx, row in summary_block.iterrows():
+                        st.markdown(f"**{row['Значение']}**")
+            
+            st.markdown("---")
+            
+            # 2. Нижняя общая таблица (начиная со строки 9, где строка 9 — заголовки, индексы с 8)
+            main_df = pd.read_excel(xls, sheet_name=dt_kt_sheet, skiprows=8)
+            # Очистим пустые строки/колонки если они есть
+            main_df = main_df.dropna(how='all')
+            
+            st.markdown("### Общая таблица данных (срок/транзакции)")
+            st.dataframe(main_df, use_container_width=True)
+            
+        # --- Вкладка 2: Cash-flow ---
+        with tabs[1]:
+            st.subheader("💵 Cash-flow")
+            cash_df = pd.read_excel(xls, sheet_name=cash_sheet)
+            st.dataframe(cash_df, use_container_width=True)
+            
+    except Exception as e:
+        st.error(f"Ошибка при обработке структуры Excel: {e}")
+else:
+    st.warning("⚠️ Не удалось загрузить файл с Google Диска.")
