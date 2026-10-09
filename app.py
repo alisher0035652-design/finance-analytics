@@ -62,15 +62,12 @@ if fh:
         with tabs[0]:
             st.subheader("📋 Анализ Дт-Кт по контрагентам")
             
-            # Читаем нижнюю общую таблицу (начиная со строки 9)
             main_df = pd.read_excel(xls, sheet_name=dt_kt_sheet, skiprows=8)
             main_df = main_df.dropna(how='all')
             
-            # Убираем лишние колонки, у которых названия начинаются с "Unnamed" или пустые
             valid_columns = [col for col in main_df.columns if str(col).strip() and not str(col).startswith('Unnamed')]
             main_df = main_df[valid_columns]
             
-            # Функция для форматирования чисел с разделителями тысяч
             def format_number(val):
                 try:
                     num = float(val)
@@ -85,7 +82,7 @@ if fh:
                 unique_contragents = sorted(main_df[contragent_col].dropna().astype(str).unique().tolist())
                 
                 selected_contragent = st.selectbox(
-                    "🔍 Поиск и выбор контрагента (начните вводить название):",
+                    "🔍 Поиск и выбор контрагента:",
                     options=unique_contragents
                 )
                 
@@ -104,28 +101,18 @@ if fh:
                         
                         st.markdown("### Сводка по контрагенту")
                         
-                        col1, col2 = st.columns([1, 2])
-                        with col1:
-                            st.text("ИНН:")
-                            st.text("Контрагент:")
-                            st.text("Поступление:")
-                            st.text("Списание:")
-                            st.text("Входящие:")
-                            st.text("Исходящие:")
-                            st.text("Сальдо:")
-                        with col2:
-                            st.markdown(f"**{inn_val}**")
-                            st.markdown(f"**{selected_contragent}**")
-                            st.markdown(f"**{postuplenie}**")
-                            st.markdown(f"**{spisanie}**")
-                            st.markdown(f"**{vkhodyashchie}**")
-                            st.markdown(f"**{iskhodyashchie}**")
-                            st.markdown(f"<span style='color:red; font-weight:bold;'>{saldo}</span>", unsafe_allow_html=True)
+                        # Собираем данные в красивую компактную табличку (она идеально держит строки и на ПК, и на смартфоне)
+                        summary_df = pd.DataFrame({
+                            "Показатель": ["ИНН", "Контрагент", "Поступление", "Списание", "Входящие", "Исходящие", "Сальдо"],
+                            "Значение": [str(inn_val), str(selected_contragent), str(postuplenie), str(spisanie), str(vkhodyashchie), str(iskhodyashchie), str(saldo)]
+                        })
+                        
+                        # Выводим без индексов, аккуратной таблицей
+                        st.table(summary_df)
             
             st.markdown("---")
             st.markdown("### Общая таблица данных (срок/транзакции)")
             
-            # Также отформатируем числовые колонки в общей таблице для удобства чтения
             display_df = main_df.copy()
             for col in display_df.columns:
                 if any(k in str(col).lower() for k in ['сумма', 'поступление', 'списание', 'входящие', 'исходящие', 'сальдо']):
@@ -137,7 +124,6 @@ if fh:
         with tabs[1]:
             st.subheader("💵 Cash-flow")
             cash_df = pd.read_excel(xls, sheet_name=cash_sheet)
-            # Уберем мусорные колонки и здесь тоже
             cash_df = cash_df.dropna(how='all')
             valid_cash_cols = [col for col in cash_df.columns if str(col).strip() and not str(col).startswith('Unnamed')]
             cash_df = cash_df[valid_cash_cols]
