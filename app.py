@@ -50,11 +50,9 @@ fh = load_excel_bytes_from_drive()
 
 if fh:
     try:
-        # Читаем все листы
         xls = pd.ExcelFile(fh)
         sheet_names = xls.sheet_names
         
-        # Находим нужные листы по именам
         dt_kt_sheet = next((s for s in sheet_names if 'дт' in s.lower() or 'кт' in s.lower() or 'анализ' in s.lower()), sheet_names[0])
         cash_sheet = next((s for s in sheet_names if 'cash' in s.lower() or 'flow' in s.lower()), sheet_names[1] if len(sheet_names) > 1 else sheet_names[0])
         
@@ -64,34 +62,62 @@ if fh:
         with tabs[0]:
             st.subheader("📋 Анализ Дт-Кт по контрагентам")
             
-            # Читаем весь лист без заголовков, чтобы точно вытащить диапазон I1:J7 (колонки 8 и 9 в индексах Python)
-            raw_df = pd.read_excel(xls, sheet_name=dt_kt_sheet, header=None)
-            
-            # 1. Верхняя таблица (диапазон I1:J7 -> строки 0-6, столбцы 8-9)
-            if raw_df.shape[1] >= 10 and raw_df.shape[0] >= 7:
-                # Извлекаем блок I1:J7
-                summary_block = raw_df.iloc[0:7, 8:10].copy()
-                summary_block.columns = ['Показатель', 'Значение']
-                
-                # Если у нас несколько контрагентов или таблица позволяет выбрать, сделаем красивый вид
-                st.markdown("### Сводка по контрагенту")
-                
-                # Отображаем в виде аккуратных метрик или таблицы
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    for idx, row in summary_block.iterrows():
-                        st.text(f"{row['Показатель']}:")
-                with col2:
-                    for idx, row in summary_block.iterrows():
-                        st.markdown(f"**{row['Значение']}**")
-            
-            st.markdown("---")
-            
-            # 2. Нижняя общая таблица (начиная со строки 9, где строка 9 — заголовки, индексы с 8)
+            # Читаем нижнюю общую таблицу (начиная со строки 9, где строка 9 — заголовки)
             main_df = pd.read_excel(xls, sheet_name=dt_kt_sheet, skiprows=8)
-            # Очистим пустые строки/колонки если они есть
             main_df = main_df.dropna(how='all')
             
+            # Ищем колонку с контрагентами и суммами в нижней таблице
+            contragent_col = next((col for col in main_df.columns if 'КОНТРАГЕНТ' in str(col).upper()), main_df.columns[1] if len(main_df.columns) > 1 else None)
+            inn_col = next((col for col in main_df.columns if 'ИНН' in str(col).upper()), main_df.columns[0] if len(main_df.columns) > 0 else None)
+            
+            if contragent_col:
+                # Получаем список уникальных контрагентов для поиска
+                unique_contragents = sorted(main_df[contragent_col].dropna().astype(str).unique().tolist())
+                
+                # Поисковая строка (выпадающий список с автоподбором по вводу нескольких букв)
+                selected_contragent = st.selectbox(
+                    "🔍 Поиск и выбор контрагента (начните вводить название):",
+                    options=unique_contragents
+                )
+                
+                if selected_contragent:
+                    # Фильтруем данные по выбранному контрагенту из нижней таблицы
+                    filtered_row = main_df[main_df[contragent_col].astype(str) == selected_contragent]
+                    
+                    if not filtered_row.empty:
+                        # Берем значения из строки нижней таблицы для красивой сводки сверху
+                        row_data = filtered_row.iloc[0]
+                        
+                        # Определяем значения для полей сводки
+                        inn_val = row_data[inn_col] if inn_col in main_df.columns else "—"
+                        postuplenie = row_data['Поступление'] if 'Поступление' in main_df.columns else 0
+                        spisanie = row_data['Списание'] if 'Списание' in main_df.columns else 0
+                        vkhodyashchie = row_data['Входящие'] if 'Входящие' in main_df.columns else 0
+                        iskhodyashchie = row_data['Исходящие'] if 'Исходящие' in main_df.columns else 0
+                        saldo = row_data['Сальдо'] if 'Сальдо' in main_df.columns else 0
+                        
+                        # Выводим блок сводки сверху (как в вашем файле I1:J7)
+                        st.markdown("### Сводка по контрагенту")
+                        
+                        col1, col2 = st.columns([1, 2])
+                        with col1:
+                            st.text("ИНН:")
+                            st.text("Контрагент:")
+                            st.text("Поступление:")
+                            st.text("Списание:")
+                            st.text("Входящие:")
+                            st.text("Исходящие:")
+                            st.text("Сальдо:")
+                        with col2:
+                            st.markdown(f"**{inn_val}**")
+                            st.markdown(f"**{selected_contragent}**")
+                            st.markdown(f"**{pd.to_numeric(postuplenie, errors='coerce'):,.2f}**" if pd.notnull(postuplenie) else "0.00")
+                            st.markdown(f"**{pd.to_numeric(spisanie, errors='coerce'):,.2f}**" if pd.notnull(spisanie) else "0.00")
+                            st.markdown(f"**{pd.to_numeric(vkhodyashchie, errors='coerce'):,.2f}**" if pd.notnull(vkhodyashchie) else "0.00")
+                            st.markdown(f"**{pd.to_numeric(iskhodyashchie, errors='coerce'):,.2f}**" if pd.notnull(iskhodyashchie) else "0.00")
+                            st.markdown(f"<span style='color:red; font-weight:bold;'>{saldo}</span>", unsafe_allow_html=True)
+            
+            st.markdown("---")
             st.markdown("### Общая таблица данных (срок/транзакции)")
             st.dataframe(main_df, use_container_width=True)
             
